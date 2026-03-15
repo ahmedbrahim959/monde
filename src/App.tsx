@@ -393,7 +393,12 @@ const speakWithGemini = async (text: string, voiceName: string = 'Kore', instruc
     }
   } catch (error: any) {
     console.error("Gemini TTS error:", error);
-    window.dispatchEvent(new CustomEvent('tts-error', { detail: error?.message || String(error) }));
+    const errorString = error?.message || String(error);
+    if (errorString.includes('429') || errorString.includes('quota') || errorString.includes('RESOURCE_EXHAUSTED')) {
+      window.dispatchEvent(new CustomEvent('tts-error', { detail: "Le quota de l'API vocale est dépassé. La voix de secours est activée." }));
+    } else {
+      window.dispatchEvent(new CustomEvent('tts-error', { detail: errorString }));
+    }
     speakText(text, 1.4, 1.1, onEnd);
   }
 };
@@ -445,7 +450,7 @@ const COMPANIONS = [
     instruction: "Dis avec une voix de tout petit garçon, extrêmement excité, joyeux et plein d'envie de partir à l'aventure. Sa voix doit déborder d'émotion et d'enthousiasme. Commence par un petit rugissement d'enfant qui fait 'Rouahr !'",
     speech: "Rouahr ! Salut ! Je suis Léo, le plus courageux des lionceaux ! Rugis avec moi et partons vite explorer la savane ! C'est parti !",
     idleAnimation: { scale: [1, 1.05, 1], rotate: [-2, 2, -2] },
-    idleTransition: { duration: 3, repeat: Infinity, ease: "easeInOut" }
+    idleTransition: { duration: 3, repeat: Infinity, ease: "easeInOut" as const }
   },
   { 
     id: 'pingouin', 
@@ -460,7 +465,7 @@ const COMPANIONS = [
     instruction: "Dis avec une voix de petit garçon, à la fois sérieuse et décontractée comme un surfeur. Il doit avoir un ton 'cool' et posé, mais rester très enfantin.",
     speech: "Youpi ! Coucou, c'est Pipo ! J'ai les fesses qui glissent et le cœur qui pétille ! On va faire des glissades géantes sur la banquise ? Allez, viens !",
     idleAnimation: { rotate: [-10, 10, -10], x: [-3, 3, -3] },
-    idleTransition: { duration: 1.5, repeat: Infinity, ease: "easeInOut" }
+    idleTransition: { duration: 1.5, repeat: Infinity, ease: "easeInOut" as const }
   },
   { 
     id: 'fee', 
@@ -475,7 +480,7 @@ const COMPANIONS = [
     instruction: "Dis avec une voix de petite fée magique, joyeuse et émerveillée",
     speech: "Merveilleux ! Je suis Fifi. Avec un coup de baguette et un peu de poussière d'étoiles, tout devient possible ! Prêt pour un voyage enchanté ?",
     idleAnimation: { y: [-5, 5, -5], rotate: [-5, 5, -5] },
-    idleTransition: { duration: 2, repeat: Infinity, ease: "easeInOut" }
+    idleTransition: { duration: 2, repeat: Infinity, ease: "easeInOut" as const }
   },
   { 
     id: 'robot', 
@@ -490,7 +495,7 @@ const COMPANIONS = [
     instruction: "Dis avec une voix de petit garçon très mignon qui se prend pour un robot. C'est un enfant scientifique intello, curieux et analytique, mais il garde une voix très enfantine et adorable tout en parlant de manière un peu saccadée.",
     speech: "Bip bop ! Initialisation terminée ! Je suis Robo. Mes capteurs détectent une aventure incroyable à 100% ! En route, humain !",
     idleAnimation: { y: [0, -4, 0] },
-    idleTransition: { duration: 0.5, repeat: Infinity, ease: "linear" }
+    idleTransition: { duration: 0.5, repeat: Infinity, ease: "linear" as const }
   },
   { 
     id: 'chat', 
@@ -505,7 +510,7 @@ const COMPANIONS = [
     instruction: "Commence par dire 'Miaou !' de façon très mignonne. Puis continue avec une voix d'enfant un peu 'fou-fou', très rigolo, amusant et plein d'énergie, tout en restant adorable et craquant.",
     speech: "Miaou ! Salut toi ! Moi c'est Sacha. Je suis souple comme un élastique et j'adore les surprises ! On va grimper tout en haut du monde ?",
     idleAnimation: { scaleY: [1, 0.9, 1.1, 1], y: [0, 2, -5, 0] },
-    idleTransition: { duration: 2, repeat: Infinity, ease: "easeInOut" }
+    idleTransition: { duration: 2, repeat: Infinity, ease: "easeInOut" as const }
   },
 ];
 
@@ -567,11 +572,13 @@ export default function App() {
             initial={{ opacity: 0, y: -50 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -50 }}
-            className="absolute top-4 left-4 right-4 z-[100] bg-red-500 text-white p-4 rounded-xl shadow-2xl border-2 border-white/50 text-sm font-medium"
+            className={`absolute top-4 left-4 right-4 z-[100] text-white p-4 rounded-xl shadow-2xl border-2 border-white/50 text-sm font-medium ${ttsError.includes('quota') ? 'bg-orange-500' : 'bg-red-500'}`}
           >
-            <p className="font-bold text-lg mb-1">⚠️ Erreur de Voix IA (Mode Secours Activé)</p>
+            <p className="font-bold text-lg mb-1">⚠️ {ttsError.includes('quota') ? 'Voix IA Limitée' : 'Erreur de Voix IA'} (Mode Secours Activé)</p>
             <p>{ttsError}</p>
-            <p className="mt-2 text-xs opacity-80">Si vous êtes sur Vercel, vérifiez que GEMINI_API_KEY est bien défini dans les variables d'environnement et que vous avez REDÉPLOYÉ le site.</p>
+            {!ttsError.includes('quota') && (
+              <p className="mt-2 text-xs opacity-80">Si vous êtes sur Vercel, vérifiez que GEMINI_API_KEY est bien défini dans les variables d'environnement et que vous avez REDÉPLOYÉ le site.</p>
+            )}
           </motion.div>
         )}
       </AnimatePresence>
@@ -807,30 +814,57 @@ function IntroRobotStep({ onNext }: { onNext: () => void; key?: string }) {
 function SelectionStep({ onSelect, onVoiceComplete }: { onSelect: (c: any) => void, onVoiceComplete: () => void; key?: string }) {
   const [activeId, setActiveId] = useState<string | null>(null);
   const [isLoadingAudio, setIsLoadingAudio] = useState(false);
+  const [presentationIndex, setPresentationIndex] = useState<number>(0);
+  const [isPresenting, setIsPresenting] = useState(true);
   const ambientSoundRef = useRef<{ stop: () => void } | null>(null);
+  const skipRef = useRef(false);
+
+  useEffect(() => {
+    let isCancelled = false;
+
+    const runPresentation = async () => {
+      for (let i = 0; i < COMPANIONS.length; i++) {
+        if (isCancelled || skipRef.current) break;
+        setPresentationIndex(i);
+        setIsLoadingAudio(true);
+        const companion = COMPANIONS[i];
+        
+        await new Promise<void>((resolve) => {
+          const onEnd = () => {
+            if (isCancelled || skipRef.current) return resolve();
+            setIsLoadingAudio(false);
+            setTimeout(resolve, 500);
+          };
+          
+          if (companion.useGemini) {
+            speakWithGemini(companion.speech, companion.voiceName, companion.instruction, onEnd);
+          } else {
+            speakText(companion.speech, companion.pitch, companion.rate, onEnd);
+          }
+        });
+      }
+      if (!isCancelled) {
+        setIsPresenting(false);
+        setPresentationIndex(-1);
+      }
+    };
+
+    runPresentation();
+
+    return () => {
+      isCancelled = true;
+      window.speechSynthesis.cancel();
+    };
+  }, []);
 
   const handleCompanionClick = async (companion: any) => {
-    if (activeId) return;
+    if (isPresenting || activeId) return;
     setActiveId(companion.id);
     onSelect(companion);
-    setIsLoadingAudio(true);
-    
-    // Start speaking immediately
-    if (companion.useGemini) {
-      await speakWithGemini(companion.speech, companion.voiceName, companion.instruction, () => {
-        setTimeout(() => {
-          onVoiceComplete();
-        }, 500);
-      });
-      setIsLoadingAudio(false);
-    } else {
-      speakText(companion.speech, companion.pitch, companion.rate, () => {
-        setTimeout(() => {
-          onVoiceComplete();
-        }, 500);
-      });
-      setIsLoadingAudio(false);
-    }
+    playFairyClick();
+    setTimeout(() => {
+      onVoiceComplete();
+    }, 500);
   };
 
   // Cleanup ambient sound if component unmounts early
@@ -878,14 +912,29 @@ function SelectionStep({ onSelect, onVoiceComplete }: { onSelect: (c: any) => vo
         ))}
       </div>
 
-      <h2 className="text-4xl md:text-5xl font-black text-indigo-800 mb-12 text-center drop-shadow-md bg-white/50 px-8 py-4 rounded-full border-4 border-white">
-        Qui veux-tu emmener ?
+      <h2 className="text-4xl md:text-5xl font-black text-indigo-800 mb-12 text-center drop-shadow-md bg-white/50 px-8 py-4 rounded-full border-4 border-white relative">
+        {isPresenting ? "Écoute tes futurs amis..." : "Qui veux-tu emmener ?"}
+        {isPresenting && (
+          <button 
+            onClick={() => {
+              skipRef.current = true;
+              window.speechSynthesis.cancel();
+              setIsPresenting(false);
+              setPresentationIndex(-1);
+            }}
+            className="absolute -bottom-10 left-1/2 -translate-x-1/2 text-sm font-bold text-indigo-600 bg-white/80 px-4 py-1 rounded-full hover:bg-white transition-colors shadow-sm"
+          >
+            Passer la présentation ⏭️
+          </button>
+        )}
       </h2>
       
       <div className="grid grid-cols-2 md:grid-cols-5 gap-4 md:gap-6 w-full">
         {COMPANIONS.map((companion, index) => {
-          const isActive = activeId === companion.id;
-          const isFaded = activeId !== null && !isActive;
+          const isCurrentlyPresenting = isPresenting && presentationIndex === index;
+          const isSelected = activeId === companion.id;
+          const isActive = isCurrentlyPresenting || isSelected;
+          const isFaded = (isPresenting && !isCurrentlyPresenting) || (activeId !== null && !isSelected);
 
           return (
             <motion.button
@@ -899,11 +948,11 @@ function SelectionStep({ onSelect, onVoiceComplete }: { onSelect: (c: any) => vo
                 zIndex: isActive ? 50 : 1
               }}
               transition={{ delay: index * 0.1, type: "spring", stiffness: 100 }}
-              whileHover={!activeId ? { scale: 1.05, rotate: 5 } : {}}
-              whileTap={!activeId ? { scale: 0.95 } : {}}
+              whileHover={(!isPresenting && !activeId) ? { scale: 1.05, rotate: 5 } : {}}
+              whileTap={(!isPresenting && !activeId) ? { scale: 0.95 } : {}}
               onClick={() => handleCompanionClick(companion)}
-              disabled={activeId !== null}
-              className={`${companion.color} ${companion.hover} p-4 md:p-6 rounded-[2.5rem] shadow-xl flex flex-col items-center justify-center gap-4 border-4 border-white/80 transition-colors cursor-pointer relative overflow-hidden`}
+              disabled={isPresenting || activeId !== null}
+              className={`${companion.color} ${companion.hover} p-4 md:p-6 rounded-[2.5rem] shadow-xl flex flex-col items-center justify-center gap-4 border-4 border-white/80 transition-colors ${(!isPresenting && !activeId) ? 'cursor-pointer' : 'cursor-default'} relative overflow-hidden`}
             >
               {isActive && (
                 <motion.div 
