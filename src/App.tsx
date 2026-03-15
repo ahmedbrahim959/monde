@@ -295,6 +295,9 @@ const playSuspenseSound = () => {
 
 const speakWithGemini = async (text: string, voiceName: string = 'Kore', instruction: string = "Dis avec une voix d'enfant très excité et joyeux", onEnd?: () => void) => {
   try {
+    if (!process.env.GEMINI_API_KEY || process.env.GEMINI_API_KEY === 'undefined') {
+      throw new Error("La clé API Gemini (GEMINI_API_KEY) est manquante ou n'a pas été compilée correctement.");
+    }
     const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
     const response = await ai.models.generateContent({
       model: "gemini-2.5-flash-preview-tts",
@@ -336,10 +339,11 @@ const speakWithGemini = async (text: string, voiceName: string = 'Kore', instruc
       };
       source.start();
     } else {
-      speakText(text, 1.4, 1.1, onEnd);
+      throw new Error("L'API a répondu, mais n'a pas renvoyé d'audio valide.");
     }
-  } catch (error) {
+  } catch (error: any) {
     console.error("Gemini TTS error:", error);
+    window.dispatchEvent(new CustomEvent('tts-error', { detail: error?.message || String(error) }));
     speakText(text, 1.4, 1.1, onEnd);
   }
 };
@@ -351,12 +355,20 @@ const speakText = (text: string, pitch = 1, rate = 0.9, onEnd?: () => void) => {
   utterance.pitch = pitch;
   utterance.rate = rate;
   
-  // Try to find a more natural voice (like Google français or a female voice for kids)
-  const voices = window.speechSynthesis.getVoices();
-  const frVoices = voices.filter(v => v.lang.startsWith('fr'));
-  if (frVoices.length > 0) {
-    // Prefer Google voices if available, otherwise just pick the first French one
-    utterance.voice = frVoices.find(v => v.name.includes('Google')) || frVoices[0];
+  const setVoiceAndSpeak = () => {
+    const voices = window.speechSynthesis.getVoices();
+    const frVoices = voices.filter(v => v.lang.startsWith('fr'));
+    if (frVoices.length > 0) {
+      // Prefer Google voices if available, otherwise just pick the first French one
+      utterance.voice = frVoices.find(v => v.name.includes('Google')) || frVoices[0];
+    }
+    window.speechSynthesis.speak(utterance);
+  };
+
+  if (window.speechSynthesis.getVoices().length === 0) {
+    window.speechSynthesis.addEventListener('voiceschanged', setVoiceAndSpeak, { once: true });
+  } else {
+    setVoiceAndSpeak();
   }
 
   if (onEnd) {
@@ -366,7 +378,6 @@ const speakText = (text: string, pitch = 1, rate = 0.9, onEnd?: () => void) => {
       onEnd();
     };
   }
-  window.speechSynthesis.speak(utterance);
 };
 
 // --- DATA ---
@@ -452,6 +463,16 @@ const COMPANIONS = [
 export default function App() {
   const [step, setStep] = useState('start');
   const [selectedCompanion, setSelectedCompanion] = useState<typeof COMPANIONS[0] | null>(null);
+  const [ttsError, setTtsError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const handleError = (e: any) => {
+      setTtsError(e.detail);
+      setTimeout(() => setTtsError(null), 15000);
+    };
+    window.addEventListener('tts-error', handleError);
+    return () => window.removeEventListener('tts-error', handleError);
+  }, []);
 
   // Ensure voices are loaded
   useEffect(() => {
@@ -471,6 +492,21 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-sky-200 overflow-hidden font-sans text-gray-800 flex flex-col items-center justify-center relative">
+      <AnimatePresence>
+        {ttsError && (
+          <motion.div 
+            initial={{ opacity: 0, y: -50 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -50 }}
+            className="absolute top-4 left-4 right-4 z-[100] bg-red-500 text-white p-4 rounded-xl shadow-2xl border-2 border-white/50 text-sm font-medium"
+          >
+            <p className="font-bold text-lg mb-1">⚠️ Erreur de Voix IA (Mode Secours Activé)</p>
+            <p>{ttsError}</p>
+            <p className="mt-2 text-xs opacity-80">Si vous êtes sur Vercel, vérifiez que GEMINI_API_KEY est bien défini dans les variables d'environnement et que vous avez REDÉPLOYÉ le site.</p>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       <AnimatePresence mode="wait">
         {step === 'start' && (
           <motion.div 
@@ -590,7 +626,7 @@ function IntroRobotStep({ onNext }: { onNext: () => void; key?: string }) {
 
   useEffect(() => {
     // Guide robot voice: warm, clear, not saturated
-    speakText(text, 1.1, 0.95);
+    speakWithGemini(text, 'Charon', "Dis avec une voix de robot guide chaleureuse et claire");
 
     let i = 0;
     const interval = setInterval(() => {
