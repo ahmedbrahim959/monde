@@ -5,6 +5,49 @@ import { GoogleGenAI, Modality } from "@google/genai";
 
 // --- AUDIO & TTS UTILS ---
 const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+const audioCache = new Map<string, AudioBuffer>();
+
+const preloadVoice = async (text: string, voiceName: string, instruction: string) => {
+  const cacheKey = `${voiceName}-${text}`;
+  if (audioCache.has(cacheKey)) return;
+  try {
+    if (!process.env.GEMINI_API_KEY || process.env.GEMINI_API_KEY === 'undefined') return;
+    const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
+    const response = await ai.models.generateContent({
+      model: "gemini-2.5-flash-preview-tts",
+      contents: [{ parts: [{ text: `${instruction} : ${text}` }] }],
+      config: {
+        responseModalities: [Modality.AUDIO],
+        speechConfig: {
+          voiceConfig: {
+            prebuiltVoiceConfig: { voiceName: voiceName as any },
+          },
+        },
+      },
+    });
+
+    const base64Audio = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+    if (base64Audio) {
+      const binaryString = window.atob(base64Audio);
+      const len = binaryString.length;
+      const bytes = new Uint8Array(len);
+      for (let i = 0; i < len; i++) {
+        bytes[i] = binaryString.charCodeAt(i);
+      }
+      
+      const arrayBuffer = bytes.buffer;
+      const audioBuffer = audioCtx.createBuffer(1, len / 2, 24000);
+      const nowBuffering = audioBuffer.getChannelData(0);
+      const view = new DataView(arrayBuffer);
+      for (let i = 0; i < len / 2; i++) {
+        nowBuffering[i] = view.getInt16(i * 2, true) / 32768;
+      }
+      audioCache.set(cacheKey, audioBuffer);
+    }
+  } catch (error) {
+    console.warn("Preload failed for", voiceName, error);
+  }
+};
 
 const playTone = (freq: number, type: OscillatorType, duration: number, delay = 0, volume = 0.03) => {
   if (audioCtx.state === 'suspended') audioCtx.resume();
@@ -295,42 +338,51 @@ const playSuspenseSound = () => {
 
 const speakWithGemini = async (text: string, voiceName: string = 'Kore', instruction: string = "Dis avec une voix d'enfant très excité et joyeux", onEnd?: () => void) => {
   try {
-    if (!process.env.GEMINI_API_KEY || process.env.GEMINI_API_KEY === 'undefined') {
-      throw new Error("La clé API Gemini (GEMINI_API_KEY) est manquante ou n'a pas été compilée correctement.");
-    }
-    const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
-    const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash-preview-tts",
-      contents: [{ parts: [{ text: `${instruction} : ${text}` }] }],
-      config: {
-        responseModalities: [Modality.AUDIO],
-        speechConfig: {
-          voiceConfig: {
-            prebuiltVoiceConfig: { voiceName: voiceName as any },
+    const cacheKey = `${voiceName}-${text}`;
+    let audioBuffer = audioCache.get(cacheKey);
+
+    if (!audioBuffer) {
+      if (!process.env.GEMINI_API_KEY || process.env.GEMINI_API_KEY === 'undefined') {
+        throw new Error("La clé API Gemini (GEMINI_API_KEY) est manquante ou n'a pas été compilée correctement.");
+      }
+      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
+      const response = await ai.models.generateContent({
+        model: "gemini-2.5-flash-preview-tts",
+        contents: [{ parts: [{ text: `${instruction} : ${text}` }] }],
+        config: {
+          responseModalities: [Modality.AUDIO],
+          speechConfig: {
+            voiceConfig: {
+              prebuiltVoiceConfig: { voiceName: voiceName as any },
+            },
           },
         },
-      },
-    });
+      });
 
-    const base64Audio = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
-    if (base64Audio) {
+      const base64Audio = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+      if (base64Audio) {
+        const binaryString = window.atob(base64Audio);
+        const len = binaryString.length;
+        const bytes = new Uint8Array(len);
+        for (let i = 0; i < len; i++) {
+          bytes[i] = binaryString.charCodeAt(i);
+        }
+        
+        const arrayBuffer = bytes.buffer;
+        audioBuffer = audioCtx.createBuffer(1, len / 2, 24000);
+        const nowBuffering = audioBuffer.getChannelData(0);
+        const view = new DataView(arrayBuffer);
+        for (let i = 0; i < len / 2; i++) {
+          nowBuffering[i] = view.getInt16(i * 2, true) / 32768;
+        }
+        audioCache.set(cacheKey, audioBuffer);
+      } else {
+        throw new Error("L'API a répondu, mais n'a pas renvoyé d'audio valide.");
+      }
+    }
+
+    if (audioBuffer) {
       if (audioCtx.state === 'suspended') await audioCtx.resume();
-      
-      const binaryString = window.atob(base64Audio);
-      const len = binaryString.length;
-      const bytes = new Uint8Array(len);
-      for (let i = 0; i < len; i++) {
-        bytes[i] = binaryString.charCodeAt(i);
-      }
-      
-      const arrayBuffer = bytes.buffer;
-      const audioBuffer = audioCtx.createBuffer(1, len / 2, 24000);
-      const nowBuffering = audioBuffer.getChannelData(0);
-      const view = new DataView(arrayBuffer);
-      for (let i = 0; i < len / 2; i++) {
-        nowBuffering[i] = view.getInt16(i * 2, true) / 32768;
-      }
-
       const source = audioCtx.createBufferSource();
       source.buffer = audioBuffer;
       source.connect(audioCtx.destination);
@@ -338,8 +390,6 @@ const speakWithGemini = async (text: string, voiceName: string = 'Kore', instruc
         if (onEnd) onEnd();
       };
       source.start();
-    } else {
-      throw new Error("L'API a répondu, mais n'a pas renvoyé d'audio valide.");
     }
   } catch (error: any) {
     console.error("Gemini TTS error:", error);
@@ -477,6 +527,25 @@ export default function App() {
   // Ensure voices are loaded
   useEffect(() => {
     window.speechSynthesis.getVoices();
+    
+    // Preload companion voices sequentially in the background
+    const preloadAllCompanions = async () => {
+      // Preload the intro robot voice first
+      await preloadVoice(
+        "Bonjour ! Je suis ton robot guide. Je vais t'aider à choisir ton compagnon pour ton aventure !",
+        "Kore",
+        "Dis avec une voix d'enfant très excité et joyeux"
+      );
+
+      for (const c of COMPANIONS) {
+        if (c.useGemini) {
+          await preloadVoice(c.speech, c.voiceName, c.instruction);
+        }
+      }
+    };
+    
+    // Start preloading after a short delay to not block initial render
+    setTimeout(preloadAllCompanions, 1000);
   }, []);
 
   const unlockAudioAndStart = () => {
@@ -623,19 +692,31 @@ export default function App() {
 function IntroRobotStep({ onNext }: { onNext: () => void; key?: string }) {
   const text = "Bonjour ! Je suis ton robot guide. Je vais t'aider à choisir ton compagnon pour ton aventure !";
   const [displayedText, setDisplayedText] = useState("");
+  const [isLoadingVoice, setIsLoadingVoice] = useState(true);
+  const [isFinished, setIsFinished] = useState(false);
+  const hasStarted = useRef(false);
 
   useEffect(() => {
-    // Guide robot voice: warm, clear, not saturated
-    speakWithGemini(text, 'Charon', "Dis avec une voix de robot guide chaleureuse et claire");
+    if (hasStarted.current) return;
+    hasStarted.current = true;
 
-    let i = 0;
-    const interval = setInterval(() => {
-      setDisplayedText(text.slice(0, i));
-      i++;
-      if (i > text.length) clearInterval(interval);
-    }, 40);
+    const startIntro = async () => {
+      // Wait for the audio to be fetched and start playing
+      await speakWithGemini(text);
+      setIsLoadingVoice(false);
 
-    return () => clearInterval(interval);
+      let i = 0;
+      const interval = setInterval(() => {
+        setDisplayedText(text.slice(0, i));
+        i++;
+        if (i > text.length) {
+          clearInterval(interval);
+          setIsFinished(true);
+        }
+      }, 40);
+    };
+
+    startIntro();
   }, []);
 
   return (
@@ -690,24 +771,34 @@ function IntroRobotStep({ onNext }: { onNext: () => void; key?: string }) {
 
         <div className="bg-white p-8 rounded-[3rem] rounded-tl-none md:rounded-tl-[3rem] md:rounded-bl-none shadow-2xl border-8 border-blue-100 flex-1 relative min-h-[150px] flex items-center">
           <p className="text-2xl md:text-3xl font-extrabold text-blue-800 leading-snug">
-            {displayedText}
-            <span className="animate-pulse text-blue-400">|</span>
+            {isLoadingVoice ? (
+              <span className="text-blue-300 animate-pulse">Chargement de la voix...</span>
+            ) : (
+              <>
+                {displayedText}
+                {!isFinished && <span className="animate-pulse text-blue-400">|</span>}
+              </>
+            )}
           </p>
         </div>
       </div>
 
-      <motion.button 
-        id="btn-choose-companion"
-        initial={{ opacity: 0, scale: 0.8 }}
-        animate={{ opacity: 1, scale: 1, y: [0, -5, 0] }}
-        transition={{ delay: 2, y: { repeat: Infinity, duration: 2, ease: "easeInOut" } }}
-        whileHover={{ scale: 1.05 }}
-        whileTap={{ scale: 0.95 }}
-        onClick={onNext}
-        className="mt-12 bg-fuchsia-500 hover:bg-fuchsia-600 text-white text-3xl font-extrabold py-6 px-10 rounded-full shadow-xl flex items-center gap-4 border-4 border-white transition-colors"
-      >
-        Choisir mon compagnon <Sparkles size={36} strokeWidth={3} />
-      </motion.button>
+      <AnimatePresence>
+        {isFinished && (
+          <motion.button 
+            id="btn-choose-companion"
+            initial={{ opacity: 0, scale: 0.8, y: 20 }}
+            animate={{ opacity: 1, scale: 1, y: [0, -5, 0] }}
+            transition={{ y: { repeat: Infinity, duration: 2, ease: "easeInOut" } }}
+            whileHover={{ scale: 1.05 }}
+            whileTap={{ scale: 0.95 }}
+            onClick={onNext}
+            className="mt-12 bg-fuchsia-500 hover:bg-fuchsia-600 text-white text-3xl font-extrabold py-6 px-10 rounded-full shadow-xl flex items-center gap-4 border-4 border-white transition-colors"
+          >
+            Choisir mon compagnon <Sparkles size={36} strokeWidth={3} />
+          </motion.button>
+        )}
+      </AnimatePresence>
     </motion.div>
   );
 }
@@ -715,26 +806,30 @@ function IntroRobotStep({ onNext }: { onNext: () => void; key?: string }) {
 // --- STEP 2: SELECTION ---
 function SelectionStep({ onSelect, onVoiceComplete }: { onSelect: (c: any) => void, onVoiceComplete: () => void; key?: string }) {
   const [activeId, setActiveId] = useState<string | null>(null);
+  const [isLoadingAudio, setIsLoadingAudio] = useState(false);
   const ambientSoundRef = useRef<{ stop: () => void } | null>(null);
 
-  const handleCompanionClick = (companion: any) => {
+  const handleCompanionClick = async (companion: any) => {
     if (activeId) return;
     setActiveId(companion.id);
     onSelect(companion);
+    setIsLoadingAudio(true);
     
     // Start speaking immediately
     if (companion.useGemini) {
-      speakWithGemini(companion.speech, companion.voiceName, companion.instruction, () => {
+      await speakWithGemini(companion.speech, companion.voiceName, companion.instruction, () => {
         setTimeout(() => {
           onVoiceComplete();
         }, 500);
       });
+      setIsLoadingAudio(false);
     } else {
       speakText(companion.speech, companion.pitch, companion.rate, () => {
         setTimeout(() => {
           onVoiceComplete();
         }, 500);
       });
+      setIsLoadingAudio(false);
     }
   };
 
@@ -830,7 +925,16 @@ function SelectionStep({ onSelect, onVoiceComplete }: { onSelect: (c: any) => vo
               
               {isActive && (
                 <div className="absolute bottom-2 bg-black/50 text-white text-[10px] px-2 py-1 rounded-full flex items-center gap-1">
-                  <Volume2 size={12} /> Voix IA...
+                  {isLoadingAudio ? (
+                    <>
+                      <div className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                      Chargement...
+                    </>
+                  ) : (
+                    <>
+                      <Volume2 size={12} /> Voix IA...
+                    </>
+                  )}
                 </div>
               )}
             </motion.button>
